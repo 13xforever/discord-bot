@@ -9,11 +9,15 @@ using DSharpPlus;
 using DSharpPlus.CommandsNext;
 using DSharpPlus.Entities;
 using DSharpPlus.Exceptions;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace CompatBot.Utils
 {
     public static class DiscordClientExtensions
     {
+        internal static readonly TimeSpan CacheTime = TimeSpan.FromMinutes(10);
+        internal static readonly MemoryCache ReportContextCache = new(new MemoryCacheOptions { ExpirationScanFrequency = TimeSpan.FromMinutes(10) });
+        
         public static DiscordMember? GetMember(this DiscordClient client, DiscordGuild? guild, ulong userId)
         {
             if (guild is null)
@@ -109,6 +113,11 @@ namespace CompatBot.Utils
 
         public static async Task<DiscordMessage?> ReportAsync(this DiscordClient client, string infraction, DiscordMessage message, string trigger, string? context, ReportSeverity severity, string? actionList = null)
         {
+            if (context is not null
+                && ReportContextCache.TryGetValue(message.Author.Id, out var previousContext)
+                && previousContext.Equals(context))
+                return null;
+            
             var logChannel = await client.GetChannelAsync(Config.BotLogId).ConfigureAwait(false);
             if (logChannel is null)
                 return null;
@@ -121,10 +130,15 @@ namespace CompatBot.Utils
             var (contents, _) = await message.DownloadAttachmentsAsync().ConfigureAwait(false);
             try
             {
+                DiscordMessage result;
                 if (contents?.Count > 0)
-                    return await logChannel.SendMessageAsync(new DiscordMessageBuilder().WithEmbed(embedBuilder.Build()).WithFiles(contents).WithAllowedMentions(Config.AllowedMentions.Nothing)).ConfigureAwait(false);
+                    result = await logChannel.SendMessageAsync(new DiscordMessageBuilder().WithEmbed(embedBuilder.Build()).WithFiles(contents).WithAllowedMentions(Config.AllowedMentions.Nothing)).ConfigureAwait(false);
                 else
-                    return await logChannel.SendMessageAsync(new DiscordMessageBuilder().WithEmbed(embedBuilder.Build()).WithAllowedMentions(Config.AllowedMentions.Nothing)).ConfigureAwait(false);
+                    result = await logChannel.SendMessageAsync(new DiscordMessageBuilder().WithEmbed(embedBuilder.Build()).WithAllowedMentions(Config.AllowedMentions.Nothing)).ConfigureAwait(false);
+
+                if (context is not null)
+                    ReportContextCache.Set(message.Author.Id, context, CacheTime);
+                return result;
             }
             finally
             {
