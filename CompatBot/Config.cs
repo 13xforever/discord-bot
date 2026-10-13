@@ -104,6 +104,18 @@ internal static class Config
     public static byte[] CryptoSalt => Convert.FromBase64String(config.GetValue(nameof(CryptoSalt), ""));
     public static bool EnableEfDebugLogging => config.GetValue(nameof(EnableEfDebugLogging), false);
     public static bool EnableBulkDiscordCommandOverwrite => config.GetValue(nameof(EnableBulkDiscordCommandOverwrite), false);
+
+    public static bool VoiceTranscriptionEnabled => config.GetValue(nameof(VoiceTranscriptionEnabled), true);
+    // number of non-bot users in a voice channel that triggers the bot to join and start transcribing
+    public static int VoiceTranscriptionJoinThreshold => config.GetValue(nameof(VoiceTranscriptionJoinThreshold), 2);
+    public static string WhisperModelVariant => config.GetValue(nameof(WhisperModelVariant), "base"); // ggml model name, e.g. "base", "small", "large-v3-turbo"
+    public static string WhisperModelPath => config.GetValue(nameof(WhisperModelPath), Path.Combine(BotAppDataFolder, "whisper", $"ggml-{WhisperModelVariant}.bin"));
+    // minimum time a user's audio has to be pending before it gets transcribed on speech end
+    public static int VoiceTranscriptionMinFlushSeconds => config.GetValue(nameof(VoiceTranscriptionMinFlushSeconds), 2);
+    // how often (in seconds) pending audio buffers are checked for transcription
+    public static int VoiceTranscriptionSweepIntervalSeconds => config.GetValue(nameof(VoiceTranscriptionSweepIntervalSeconds), 15);
+    // pending audio older than this (in seconds) gets transcribed by the sweep, even if the user is still speaking
+    public static int VoiceTranscriptionSweepThresholdSeconds => config.GetValue(nameof(VoiceTranscriptionSweepThresholdSeconds), 30);
    
     internal static string CurrentLogPath => Path.GetFullPath(Path.Combine(LogPath, "bot.log"));
 

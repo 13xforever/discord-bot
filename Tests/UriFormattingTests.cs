@@ -12,13 +12,13 @@ public class UriFormattingTests
     public void IrdLinkFormatTest(string filename)
     {
         var uri = IrdClient.GetEscapedDownloadLink(filename);
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(uri, Does.Not.Contains(" "));
             Assert.That(uri, Does.Not.Contains("("));
             Assert.That(uri, Does.Not.Contains(")"));
             Assert.That(uri, Does.Not.Contains("%2F"));
             Assert.That(uri, Does.EndWith(".ird"));
-        });
+        }
     }
 }

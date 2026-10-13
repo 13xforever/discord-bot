@@ -20,7 +20,7 @@ public class RandomTests
         }
         var expectedMedian = sampleCount / (double)dice;
         Console.WriteLine("Naive\tRange");
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             for (var i = 0; i < dice; i++)
             {
@@ -30,7 +30,7 @@ public class RandomTests
                 Assert.That(devNaive, Is.LessThan(expectedDeviation), $"Naive dice face {i + 1}");
                 Assert.That(devRange, Is.LessThan(expectedDeviation), $"Range dice face {i + 1}");
             }
-        });
+        }
     }
 
     private static double GetPercent(int actual, double expected)

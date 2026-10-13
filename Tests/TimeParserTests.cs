@@ -13,12 +13,12 @@ public class TimeParserTests
     public void TimeZoneConverterTest(string input, string utcInput)
     {
         var utc = DateTime.Parse(utcInput).Normalize();
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(TimeParser.TryParse(input, out var result), Is.True, $"{input} failed to parse\nSupported time zones: {string.Join(", ", TimeParser.GetSupportedTimeZoneAbbreviations())}");
             Assert.That(result, Is.EqualTo(utc));
             Assert.That(result.Kind, Is.EqualTo(DateTimeKind.Utc));
-        });
+        }
     }
 
     [Test]

@@ -9,10 +9,12 @@ using CompatBot.Commands.Processors;
 using CompatBot.Database;
 using CompatBot.Database.Providers;
 using CompatBot.EventHandlers;
+using CompatBot.EventHandlers.VoiceTranscription;
 using CompatBot.Ocr;
 using CompatBot.Utils.Extensions;
 using DSharpPlus.Commands.Processors.TextCommands;
 using DSharpPlus.Commands.Processors.TextCommands.Parsing;
+using DSharpPlus.Voice;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration.UserSecrets;
 using Microsoft.Extensions.DependencyInjection;
@@ -136,7 +138,8 @@ internal static class Program
                 new GithubClient.Client(Config.GithubToken).GetPipelineDurationAsync(Config.Cts.Token),
                 Config.GetCurrentGitRevisionAsync(Config.Cts.Token),
                 Bot.UpdateCheckScheduledAsync(Config.Cts.Token),
-                OcrProvider.InitializeAsync(Config.Cts.Token)
+                OcrProvider.InitializeAsync(Config.Cts.Token),
+                Config.VoiceTranscriptionEnabled ? WhisperTranscriber.PreloadModelAsync(Config.Cts.Token) : Task.CompletedTask
             );
 
 #if DEBUG
@@ -157,6 +160,7 @@ internal static class Program
 #endif
             var clientInfoLogged = false;
             var mediaScreenshotMonitor = new MediaScreenshotMonitor();
+            var voiceSessionMonitor = new VoiceSessionMonitor();
             var clientBuilder = DiscordClientBuilder
                 .CreateDefault(Config.Token, DiscordIntents.AllUnprivileged | DiscordIntents.GuildMembers | DiscordIntents.MessageContents)
                 .ConfigureLogging(builder => builder.AddNLog(LogManager.Configuration!))
@@ -206,6 +210,7 @@ internal static class Program
 #endif
                 })
                 .UseInteractivity()
+                .UseVoice()
                 .ConfigureEventHandlers(config =>
                 {
                     config.HandleSessionCreated(async (c, sceArgs) =>
@@ -321,6 +326,7 @@ internal static class Program
                         },
 #endif
                     ]));
+                    config.HandleVoiceStateUpdated(voiceSessionMonitor.OnVoiceStateUpdated);
                 });
             using var client = clientBuilder.Build();
             mediaScreenshotMonitor.Client = client;

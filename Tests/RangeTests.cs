@@ -12,7 +12,7 @@ public class RangeTests
     {
         var testValue = new[] {0, 1, 2, 3, 4};
 		var list = new UniqueList<int>(testValue);
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
 	        Assert.That(list, Is.EqualTo(testValue));
 
@@ -47,19 +47,19 @@ public class RangeTests
             Assert.That(list[..^1], Is.EqualTo(testValue[..^1]));
             Assert.That(list[..^4], Is.EqualTo(testValue[..^4]));
             Assert.That(list[..^5], Is.EqualTo(testValue[..^5]));
-        });
+        }
     }
 
     [Test]
 	public void SubstringTests()
     {
         var str = "abc";
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(str[1..], Is.EqualTo(str.Substring(1)));
             Assert.That("a"[1..], Is.EqualTo("a".Substring(1)));
             Assert.That(str[0], Is.EqualTo('a'));
             Assert.That(str[^1], Is.EqualTo('c'));
-        });
+        }
     }
 }

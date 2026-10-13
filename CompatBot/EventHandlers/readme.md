@@ -160,3 +160,14 @@ As there's no sure way to check if some symbol will be drawn above or below the 
 3. Ignore visually invisible symbols, count the number of combining characters.
 4. If there are more than 2 visually consecutive combining characters, it's a good indication of Unicode abuse.
 5. On top of that, we check with a list of known normal characters that are often rendered above or below the base line.
+
+Voice Transcription
+-------------------
+
+When a certain number of humans (2 by default, configurable via `VoiceTranscriptionJoinThreshold`) gather in a voice channel, the bot joins it and transcribes the audio using [whisper.net](https://github.com/sandrohanea/whisper.net). The ggml model is downloaded on first start (variant configurable via `WhisperModelVariant`, e.g. `base`, `small`, `large-v3-turbo`) and kept in memory for the lifetime of the process.
+
+Each speaker has an in-memory buffer of 16 kHz PCM audio (downsampled from Discord's 48 kHz Opus stream), and only frames received while the user is actually speaking are buffered. Transcription runs when a user stops speaking (if the pending audio is at least `VoiceTranscriptionMinFlushSeconds` old), on a periodic sweep (`VoiceTranscriptionSweepIntervalSeconds` / `VoiceTranscriptionSweepThresholdSeconds`) to catch long monologues, and one final time when the session ends.
+
+When the number of humans in the channel drops below the threshold, the bot leaves and posts the full transcript to #bot-log as a text file attachment: one line per utterance with a UTC timestamp and the speaker's display name.
+
+While sessions are active, `/voice transcription` (moderator-only) returns the in-progress transcripts for all of them as attachments.

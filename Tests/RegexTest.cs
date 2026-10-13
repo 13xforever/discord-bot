@@ -19,10 +19,10 @@ public partial class RegexTest
             """;
         var latin = input.ToLatin8BitEncoding();
         var match = RapFileMissingLogLine().Match(latin);
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(match.Success, Is.True);
             Assert.That(match.Groups["rap_file"].Value, Is.EqualTo("/dev_hdd0/home/00000001/exdata/EP4062-NPEB02436_00-ADDCONTENT000001.rap"));
-        });
+        }
     }
 }
