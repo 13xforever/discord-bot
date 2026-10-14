@@ -16,7 +16,7 @@ internal sealed class VoiceSession
     private readonly DefaultAudioReceiver receiver;
     private readonly ConcurrentDictionary<ulong, UserAudioBuffer> users = new();
     private readonly ConcurrentDictionary<ulong, string> userNames = new();
-    private readonly object linesGate = new();
+    private readonly Lock linesGate = new();
     private readonly List<TranscriptFormatter.Line> lines = [];
     private readonly CancellationTokenSource cts = new();
     private readonly DateTime startedUtc = DateTime.UtcNow;

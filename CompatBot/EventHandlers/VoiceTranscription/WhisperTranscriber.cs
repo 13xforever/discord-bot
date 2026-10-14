@@ -14,31 +14,39 @@ internal static class WhisperTranscriber
     private const int MinSamplesForTranscription = 1600; // less than 0.1s of audio is not worth transcribing
 
     private static readonly SemaphoreSlim JobLock = new(1, 1);
-    private static readonly object FactoryGate = new();
+    private static readonly Lock FactoryGate = new();
     private static WhisperFactory? factory;
     private static int logFailed;
 
+    private static readonly string ModelCachePath = Path.Combine(Config.BotAppDataFolder, "voice-models");
+    private static readonly string ModelPath = Path.Combine(ModelCachePath, $"ggml-{Config.WhisperModelVariant}.bin");
+
     public static async Task PreloadModelAsync(CancellationToken cancellationToken)
     {
-        var modelPath = Config.WhisperModelPath;
+        if (!Config.VoiceTranscriptionEnabled)
+            return;
+        
         try
         {
-            if (!File.Exists(modelPath))
+            if (!Directory.Exists(ModelCachePath))
+                Directory.CreateDirectory(ModelCachePath);
+
+            if (!File.Exists(ModelPath))
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(modelPath)!);
-                var partialPath = modelPath + ".part";
+                var partialPath = ModelPath + ".part";
                 if (File.Exists(partialPath))
                     File.Delete(partialPath);
 
                 Config.Log.Info($"Downloading whisper model ({Config.WhisperModelVariant})…");
-                using var modelStream = await WhisperGgmlDownloader.Default.GetGgmlModelAsync(ParseModelVariant(Config.WhisperModelVariant)).ConfigureAwait(false);
+                await using var modelStream = await WhisperGgmlDownloader.Default.GetGgmlModelAsync(
+                    ParseModelVariant(Config.WhisperModelVariant),
+                    cancellationToken: cancellationToken
+                ).ConfigureAwait(false);
                 await using var file = File.Create(partialPath);
                 await modelStream.CopyToAsync(file, cancellationToken).ConfigureAwait(false);
-                File.Move(partialPath, modelPath);
+                File.Move(partialPath, ModelPath);
             }
-
-            GetFactory(); // load the native runtime and validate the model early
-            Config.Log.Info($"Whisper model ready: {modelPath}");
+            Config.Log.Info($"Whisper model '{Config.WhisperModelVariant}' available");
         }
         catch (Exception e)
         {
@@ -47,7 +55,7 @@ internal static class WhisperTranscriber
         }
     }
 
-    public static async Task<IReadOnlyList<TranscribedSegment>> TranscribeAsync(short[] samples16k, CancellationToken cancellationToken)
+    public static async ValueTask<IReadOnlyList<TranscribedSegment>> TranscribeAsync(short[] samples16k, CancellationToken cancellationToken)
     {
         var segments = new List<TranscribedSegment>();
         if (samples16k.Length < MinSamplesForTranscription)
@@ -60,12 +68,12 @@ internal static class WhisperTranscriber
         await JobLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            using var processor = GetFactory().CreateBuilder().WithLanguage("auto").Build();
+            await using var processor = GetFactory().CreateBuilder().WithLanguage("auto").Build();
             await foreach (var segment in processor.ProcessAsync(samples, cancellationToken).ConfigureAwait(false))
             {
-                var text = segment.Text?.Trim();
+                var text = segment.Text.Trim();
                 if (!string.IsNullOrEmpty(text))
-                    segments.Add(new TranscribedSegment(text, segment.Start, segment.End));
+                    segments.Add(new(text, segment.Start, segment.End));
             }
         }
         catch (OperationCanceledException)
@@ -74,7 +82,7 @@ internal static class WhisperTranscriber
         }
         catch (Exception e)
         {
-            if (Interlocked.Exchange(ref logFailed, 1) == 0)
+            if (Interlocked.Exchange(ref logFailed, 1) is 0)
                 Config.Log.Error(e, "Voice transcription unavailable: whisper failed to process audio");
         }
         finally
@@ -89,11 +97,13 @@ internal static class WhisperTranscriber
     {
         lock (FactoryGate)
         {
-            factory ??= WhisperFactory.FromPath(Config.WhisperModelPath);
+            factory ??= WhisperFactory.FromPath(ModelPath);
             return factory;
         }
     }
 
-    private static GgmlType ParseModelVariant(string variant) =>
-        Enum.TryParse<GgmlType>(variant.Replace("-", ""), ignoreCase: true, out var type) ? type : GgmlType.Base;
+    private static GgmlType ParseModelVariant(string variant)
+        => Enum.TryParse<GgmlType>(variant.Replace("-", ""), ignoreCase: true, out var type)
+            ? type
+            : GgmlType.Base;
 }

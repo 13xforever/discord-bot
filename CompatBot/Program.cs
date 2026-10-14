@@ -139,7 +139,7 @@ internal static class Program
                 Config.GetCurrentGitRevisionAsync(Config.Cts.Token),
                 Bot.UpdateCheckScheduledAsync(Config.Cts.Token),
                 OcrProvider.InitializeAsync(Config.Cts.Token),
-                Config.VoiceTranscriptionEnabled ? WhisperTranscriber.PreloadModelAsync(Config.Cts.Token) : Task.CompletedTask
+                WhisperTranscriber.PreloadModelAsync(Config.Cts.Token)
             );
 
 #if DEBUG

@@ -106,10 +106,9 @@ internal static class Config
     public static bool EnableBulkDiscordCommandOverwrite => config.GetValue(nameof(EnableBulkDiscordCommandOverwrite), false);
 
     public static bool VoiceTranscriptionEnabled => config.GetValue(nameof(VoiceTranscriptionEnabled), true);
-    // number of non-bot users in a voice channel that triggers the bot to join and start transcribing
     public static int VoiceTranscriptionJoinThreshold => config.GetValue(nameof(VoiceTranscriptionJoinThreshold), 2);
-    public static string WhisperModelVariant => config.GetValue(nameof(WhisperModelVariant), "base"); // ggml model name, e.g. "base", "small", "large-v3-turbo"
-    public static string WhisperModelPath => config.GetValue(nameof(WhisperModelPath), Path.Combine(BotAppDataFolder, "whisper", $"ggml-{WhisperModelVariant}.bin"));
+    // see https://github.com/sandrohanea/whisper.net/blob/main/Whisper.net/Ggml/GgmlType.cs
+    public static string WhisperModelVariant => config.GetValue(nameof(WhisperModelVariant), "base"); // tiny, base, small, medium, largev1-v3, largev3turbo
     // minimum time a user's audio has to be pending before it gets transcribed on speech end
     public static int VoiceTranscriptionMinFlushSeconds => config.GetValue(nameof(VoiceTranscriptionMinFlushSeconds), 2);
     // how often (in seconds) pending audio buffers are checked for transcription
