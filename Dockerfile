@@ -2,7 +2,7 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0-resolute AS base
 
 # Native libgdiplus dependencies
 RUN apt-get update
-RUN DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install -y --allow-unauthenticated libc6-dev libgdiplus libx11-dev fonts-roboto tzdata libarchive13t64 libleptonica6
+RUN DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install -y --allow-unauthenticated libc6-dev libgdiplus libx11-dev fonts-roboto tzdata libarchive13t64 libleptonica6 libgomp1
 RUN ln -s /usr/lib/x86_64-linux-gnu/libleptonica.so.6 /usr/lib/x86_64-linux-gnu/liblept.so.5
 
 # Regular stuff

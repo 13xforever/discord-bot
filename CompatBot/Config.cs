@@ -115,6 +115,18 @@ internal static class Config
     public static int VoiceTranscriptionSweepIntervalSeconds => config.GetValue(nameof(VoiceTranscriptionSweepIntervalSeconds), 15);
     // pending audio older than this (in seconds) gets transcribed by the sweep, even if the user is still speaking
     public static int VoiceTranscriptionSweepThresholdSeconds => config.GetValue(nameof(VoiceTranscriptionSweepThresholdSeconds), 30);
+    // how long (in seconds) a channel stays queued after a voice state change before we decide to join or leave it
+    public static int VoiceTranscriptionDecisionDelaySeconds => config.GetValue(nameof(VoiceTranscriptionDecisionDelaySeconds), 2);
+    // how many voice channels are transcribed at once; whisper only handles one chunk at a time
+    public static int VoiceTranscriptionMaxSessions => config.GetValue(nameof(VoiceTranscriptionMaxSessions), 3);
+    // how many transcription jobs a single session may have queued before it holds its audio back
+    public static int VoiceTranscriptionMaxQueuedJobs => config.GetValue(nameof(VoiceTranscriptionMaxQueuedJobs), 2);
+    // audio buffered for one user beyond this (in seconds) gets handed over even with a full queue
+    public static int VoiceTranscriptionMaxPendingSeconds => config.GetValue(nameof(VoiceTranscriptionMaxPendingSeconds), 60);
+    // transcript lines beyond this count are dropped, mostly to contain whisper hallucination loops
+    public static int VoiceTranscriptionMaxLines => config.GetValue(nameof(VoiceTranscriptionMaxLines), 2000);
+    // how long (in seconds) a dropped voice connection gets to resume with audio before the session ends
+    public static int VoiceTranscriptionReconnectGraceSeconds => config.GetValue(nameof(VoiceTranscriptionReconnectGraceSeconds), 30);
    
     internal static string CurrentLogPath => Path.GetFullPath(Path.Combine(LogPath, "bot.log"));
 

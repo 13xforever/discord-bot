@@ -239,7 +239,8 @@ internal static class Program
                     });
                     config.HandleGuildAvailable(MultiEventHandlerWrapper<GuildAvailableEventArgs>.CreateUnordered([
                         OnGuildAvailableAsync,
-                        (c, _) => UsernameValidationMonitor.MonitorAsync(c, true)
+                        (c, _) => UsernameValidationMonitor.MonitorAsync(c, true),
+                        voiceSessionMonitor.OnGuildAvailable
                     ]));
                     config.HandleGuildUnavailable((_, guArgs) =>
                     {
@@ -327,9 +328,11 @@ internal static class Program
 #endif
                     ]));
                     config.HandleVoiceStateUpdated(voiceSessionMonitor.OnVoiceStateUpdated);
+                    config.HandleClientStopped(voiceSessionMonitor.OnClientStopped);
                 });
             using var client = clientBuilder.Build();
             mediaScreenshotMonitor.Client = client;
+            voiceSessionMonitor.Client = client;
 
             //Watchdog.DisconnectTimestamps.Enqueue(DateTime.UtcNow);
 

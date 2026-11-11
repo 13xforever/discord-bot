@@ -4,21 +4,29 @@ using System.Runtime.InteropServices;
 namespace CompatBot.EventHandlers.VoiceTranscription;
 
 /// <summary>
-/// Accumulates 16 kHz mono PCM samples for a single voice channel user in memory.
-/// Only audio received while the user is actually speaking gets buffered, since the
-/// receiver's pipe also carries silence frames that we don't want to transcribe.
+/// Accumulates 16 kHz mono PCM samples for a single voice channel participant in memory.
+/// The participant's pipe carries their whole 48 kHz stereo stream, silence frames included, so
+/// samples only get added to the buffer while that user is actually speaking. The stream is fed
+/// through the resampler regardless of the speaking state to keep channel pairing and decimation
+/// phase aligned across chunks.
 /// </summary>
 internal sealed class UserAudioBuffer
 {
+    private const int InitialBufferSize = 4096;
+
     private readonly PipeReader reader;
     private readonly Func<bool> isSpeakingProvider;
     private readonly PcmResampler resampler = new();
-    private readonly object gate = new();
+    private readonly Lock gate = new();
 
-    private short[] buffer = [];
+    private short[] buffer = new short[InitialBufferSize];
+    private int length;
     private DateTime? chunkStartUtc;
-    private long voicedSampleCount;
-    private long receivedSampleCount;
+
+    private long receivedFrameCount;
+    private long lastProcessedFrameCount;
+    private byte pendingByte;
+    private bool hasPendingByte;
 
     public UserAudioBuffer(PipeReader reader, Func<bool> isSpeakingProvider)
     {
@@ -27,17 +35,19 @@ internal sealed class UserAudioBuffer
     }
 
     /// <summary>
-    /// Total number of 16 kHz samples buffered while the user was speaking.
+    /// Total number of 48 kHz frames read from the pipe, voiced or not.
+    /// A live connection keeps pushing frames at all times, spoken or silent, which is what tells a
+    /// live connection apart from one that quietly died.
     /// </summary>
-    public long VoicedSampleCount
-    {
-        get { lock (gate) return voicedSampleCount; }
-    }
+    public long ReceivedFrameCount => Interlocked.Read(ref receivedFrameCount);
 
     /// <summary>
-    /// Total number of 48 kHz samples received from the pipe, voiced or not.
+    /// Number of 16 kHz samples waiting to be transcribed.
     /// </summary>
-    public long ReceivedSampleCount => Interlocked.Read(ref receivedSampleCount);
+    public int BufferedSampleCount
+    {
+        get { lock (gate) return length; }
+    }
 
     public Task RunAsync(CancellationToken cancellationToken) => ReadLoopAsync(cancellationToken);
 
@@ -49,39 +59,91 @@ internal sealed class UserAudioBuffer
             {
                 var result = await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
                 var segment = result.Buffer;
-                if (segment.Length > 0)
-                    foreach (var seg in segment)
-                        AppendChunk(MemoryMarshal.Cast<byte, short>(seg.Span));
-                if (result.IsCompleted)
-                    break;
+                foreach (var memory in segment)
+                    ConsumeBytes(memory.Span);
                 reader.AdvanceTo(segment.End);
+                if (result.IsCompleted || result.IsCanceled)
+                    break;
             }
         }
         catch (OperationCanceledException)
         {
             // normal shutdown path
         }
+        catch (Exception e)
+        {
+            Config.Log.Warn(e, "A voice audio stream broke unexpectedly");
+        }
+        finally
+        {
+            // release the pipe, otherwise the writing side keeps buffering audio forever
+            try
+            {
+                await reader.CompleteAsync().ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                Config.Log.Debug(e, "Failed to complete the voice audio pipe");
+            }
+        }
     }
 
-    private void AppendChunk(ReadOnlySpan<short> samples48k)
+    private void ConsumeBytes(ReadOnlySpan<byte> bytes)
     {
-        Interlocked.Add(ref receivedSampleCount, samples48k.Length);
-        if (!isSpeakingProvider())
-            return;
-
-        var samples16k = resampler.Resample(samples48k);
-        lock (gate)
+        // pipe segments are not sample aligned, so a sample can be split between two of them
+        var start = 0;
+        if (hasPendingByte)
         {
-            voicedSampleCount += samples16k.Length;
-            if (samples16k.Length == 0)
+            if (bytes.IsEmpty)
                 return;
-
-            var grown = new short[buffer.Length + samples16k.Length];
-            buffer.CopyTo(grown);
-            samples16k.CopyTo(grown.AsSpan(buffer.Length));
-            buffer = grown;
-            chunkStartUtc ??= DateTime.UtcNow;
+            // the pending byte started that sample, so the new one completes it as the high half
+            var sample = unchecked((short)(pendingByte | (bytes[0] << 8)));
+            Span<short> single = [sample];
+            ConsumeSamples(single);
+            start = 1;
+            hasPendingByte = false;
         }
+
+        var aligned = bytes[start..];
+        var sampleCount = aligned.Length / sizeof(short);
+        if (sampleCount > 0)
+            ConsumeSamples(MemoryMarshal.Cast<byte, short>(aligned[..(sampleCount * sizeof(short))]));
+
+        if ((aligned.Length & 1) != 0)
+        {
+            pendingByte = aligned[^1];
+            hasPendingByte = true;
+        }
+    }
+
+    private void ConsumeSamples(ReadOnlySpan<short> interleavedSamples)
+    {
+        var samples16k = resampler.Resample(interleavedSamples);
+        var processedFrames = resampler.ProcessedFrameCount;
+        var newFrames = processedFrames - lastProcessedFrameCount;
+        lastProcessedFrameCount = processedFrames;
+
+        if (samples16k.Length != 0 && isSpeakingProvider())
+            lock (gate)
+            {
+                EnsureCapacity(length + samples16k.Length);
+                samples16k.CopyTo(buffer.AsSpan(length));
+                length += samples16k.Length;
+                chunkStartUtc ??= DateTime.UtcNow;
+            }
+
+        // counted last, so anyone watching this counter can see the samples that come with it
+        Interlocked.Add(ref receivedFrameCount, newFrames);
+    }
+
+    private void EnsureCapacity(int required)
+    {
+        if (required <= buffer.Length)
+            return;
+        var newSize = buffer.Length;
+        while (newSize < required)
+            newSize *= 2;
+        Array.Resize(ref buffer, newSize);
     }
 
     /// <summary>
@@ -91,7 +153,8 @@ internal sealed class UserAudioBuffer
     {
         lock (gate)
         {
-            if (this.chunkStartUtc is null
+            if (length == 0
+                || this.chunkStartUtc is null
                 || DateTime.UtcNow - this.chunkStartUtc.Value < minAge)
             {
                 samples = [];
@@ -100,8 +163,8 @@ internal sealed class UserAudioBuffer
             }
 
             chunkStartUtc = this.chunkStartUtc.Value;
-            samples = buffer;
-            buffer = [];
+            samples = buffer.AsSpan(0, length).ToArray();
+            length = 0;
             this.chunkStartUtc = null;
             return true;
         }
@@ -114,8 +177,8 @@ internal sealed class UserAudioBuffer
     {
         lock (gate)
         {
-            var samples = buffer;
-            buffer = [];
+            var samples = buffer.AsSpan(0, length).ToArray();
+            length = 0;
             var start = chunkStartUtc;
             chunkStartUtc = null;
             return (samples, start);

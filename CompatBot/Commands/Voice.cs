@@ -7,6 +7,7 @@ namespace CompatBot.Commands;
 [Description("Voice channel tools")]
 internal static partial class Voice
 {
+    // Discord takes at most 10 attachments per message
     private const int MaxAttachments = 10;
 
     [Command("transcription"), RequiresBotModRole]
@@ -14,24 +15,28 @@ internal static partial class Voice
     public static async ValueTask Transcription(SlashCommandContext ctx)
     {
         var ephemeral = !ctx.Channel.IsPrivate;
-        var sessions = VoiceSessionMonitor.ActiveSessions.ToList();
+        var sessions = VoiceSessionMonitor.ActiveSessions
+            .OrderBy(session => session.ChannelName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
         if (sessions.Count == 0)
         {
             await ctx.RespondAsync($"{Config.Reactions.Failure} No active voice transcription sessions", ephemeral: ephemeral).ConfigureAwait(false);
             return;
         }
 
-        var currentChannelId = ctx.Channel.Id;
         var response = new DiscordInteractionResponseBuilder().AsEphemeral(ephemeral);
         var streams = new List<Stream>();
         try
         {
-            foreach (var session in sessions.OrderBy(s => s.ChannelId == currentChannelId ? 0 : 1).Take(MaxAttachments))
+            foreach (var session in sessions.Take(MaxAttachments))
             {
                 var stream = new MemoryStream(Encoding.UTF8.GetBytes(session.BuildTranscript(null)));
                 streams.Add(stream);
                 response.AddFile(session.GetAttachmentFilename(), stream);
             }
+            if (sessions.Count > streams.Count)
+                response.WithContent($"Showing {streams.Count} of {sessions.Count} in-progress transcripts");
+
             await ctx.RespondAsync(response).ConfigureAwait(false);
         }
         catch (Exception e)
