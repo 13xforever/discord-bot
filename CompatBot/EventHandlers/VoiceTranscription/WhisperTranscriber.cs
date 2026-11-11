@@ -45,12 +45,14 @@ internal static class WhisperTranscriber
                     File.Delete(partialPath);
 
                 Config.Log.Info($"Downloading whisper model ({Config.WhisperModelVariant})…");
-                await using var modelStream = await WhisperGgmlDownloader.Default.GetGgmlModelAsync(
-                    ParseModelVariant(Config.WhisperModelVariant),
-                    cancellationToken: cancellationToken
-                ).ConfigureAwait(false);
-                await using var file = File.Create(partialPath);
-                await modelStream.CopyToAsync(file, cancellationToken).ConfigureAwait(false);
+                {
+                    await using var modelStream = await WhisperGgmlDownloader.Default.GetGgmlModelAsync(
+                        ParseModelVariant(Config.WhisperModelVariant),
+                        cancellationToken: cancellationToken
+                    ).ConfigureAwait(false);
+                    await using var file = File.Create(partialPath);
+                    await modelStream.CopyToAsync(file, cancellationToken).ConfigureAwait(false);
+                }
                 File.Move(partialPath, ModelPath);
             }
             Config.Log.Info($"Whisper model '{Config.WhisperModelVariant}' available");
