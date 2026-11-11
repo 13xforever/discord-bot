@@ -118,7 +118,9 @@ internal static class Config
     // how long (in seconds) a channel stays queued after a voice state change before we decide to join or leave it
     public static int VoiceTranscriptionDecisionDelaySeconds => config.GetValue(nameof(VoiceTranscriptionDecisionDelaySeconds), 2);
     // how many voice channels are transcribed at once; whisper only handles one chunk at a time
-    public static int VoiceTranscriptionMaxSessions => config.GetValue(nameof(VoiceTranscriptionMaxSessions), 3);
+    public static int VoiceTranscriptionMaxSessions => config.GetValue(nameof(VoiceTranscriptionMaxSessions), 2);
+    // speex resampler quality, 1 through 10: higher is a longer filter, 3 is the upstream voice preset
+    public static int VoiceTranscriptionResamplerQuality => config.GetValue(nameof(VoiceTranscriptionResamplerQuality), 3);
     // how many transcription jobs a single session may have queued before it holds its audio back
     public static int VoiceTranscriptionMaxQueuedJobs => config.GetValue(nameof(VoiceTranscriptionMaxQueuedJobs), 2);
     // audio buffered for one user beyond this (in seconds) gets handed over even with a full queue

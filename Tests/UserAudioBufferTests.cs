@@ -70,8 +70,8 @@ public class UserAudioBufferTests
             Assert.That(buffer.BufferedSampleCount, Is.EqualTo(DecimatedPerBurst));
             Assert.That(buffer.TryTakePending(TimeSpan.Zero, out var samples, out var startUtc), Is.True);
             Assert.That(samples, Has.Length.EqualTo(DecimatedPerBurst));
-            // the filter ramps up from an empty history, the tail is the steady state
-            Assert.That(samples.Skip(4).All(s => s == 100), Is.True);
+            // the filter has to fill up before it reaches steady state, so only the tail is checked
+            Assert.That(samples.Skip(DecimatedPerBurst / 2).All(s => Math.Abs(s - 100) <= 2), Is.True);
             Assert.That(Math.Abs((startUtc - DateTime.UtcNow).TotalSeconds), Is.LessThan(5));
         }
 
@@ -143,7 +143,22 @@ public class UserAudioBufferTests
         }
     }
 
-    private static async Task<(long Frames, short[] Samples)> ReadAllAsync(Pipe pipe, byte[] payload, int[] chunkSizes)
+    [Test]
+    public async Task DrainingOnTheLastTakeRecoversWhatTheFilterHolds()
+    {
+        var plain = await ReadAllAsync(new Pipe(), ToBytes(StereoBurst(100)), [int.MaxValue], drain: false);
+        var drained = await ReadAllAsync(new Pipe(), ToBytes(StereoBurst(100)), [int.MaxValue], drain: true);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plain.Samples.Length, Is.EqualTo(DecimatedPerBurst));
+            Assert.That(drained.Samples.Length, Is.GreaterThan(plain.Samples.Length),
+                "the samples the filter still holds must come out when the stream is dropped for good");
+            Assert.That(drained.Samples[..plain.Samples.Length], Is.EqualTo(plain.Samples));
+        }
+    }
+
+    private static async Task<(long Frames, short[] Samples)> ReadAllAsync(Pipe pipe, byte[] payload, int[] chunkSizes, bool drain = false)
     {
         var buffer = new UserAudioBuffer(pipe.Reader, () => true);
         var runTask = buffer.RunAsync(CancellationToken.None);
@@ -159,7 +174,7 @@ public class UserAudioBufferTests
 
         await pipe.Writer.CompleteAsync().ConfigureAwait(false);
         await runTask.ConfigureAwait(false);
-        var (samples, _) = buffer.TakeAll();
+        var (samples, _) = buffer.TakeAll(drain);
         return (buffer.ReceivedFrameCount, samples);
     }
 

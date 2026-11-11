@@ -75,6 +75,7 @@
     <PackageReference Include="SharpCompress" Version="0.50.8" />
     <PackageReference Include="SixLabors.ImageSharp.Drawing" Version="2.1.7" />
     <PackageReference Include="SourceGear.sqlite3" Version="3.53.4" />
+    <PackageReference Include="SpeexResamplerSharp" Version="1.0.0" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
     <PackageReference Include="TesseractCSharp" Version="1.0.5" />
     <PackageReference Include="Whisper.net" Version="1.9.1" />

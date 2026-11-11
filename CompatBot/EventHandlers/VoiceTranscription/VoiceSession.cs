@@ -50,6 +50,7 @@ internal sealed class VoiceSession
         receiver.UserStartedSpeaking += OnUserStartedSpeakingAsync;
         receiver.UserStoppedSpeaking += OnUserStoppedSpeakingAsync;
 
+        Config.Log.Debug($"Resampling #{channel.Name} audio {PcmResampler.SourceSampleRate} Hz stereo → {PcmResampler.TargetSampleRate} Hz mono, speex quality {Config.VoiceTranscriptionResamplerQuality}");
         seedTask = Task.Run(SeedExistingUsersAsync);
         sweepTask = Task.Run(SweepLoopAsync);
     }
@@ -121,7 +122,8 @@ internal sealed class VoiceSession
             return Task.CompletedTask;
 
         departedFrameCount[userId] = buffer.ReceivedFrameCount;
-        var (samples, chunkStartUtc) = buffer.TakeAll();
+        // this is the last we'll ever hear from that participant's stream, so flush the filter too
+        var (samples, chunkStartUtc) = buffer.TakeAll(drainResampler: true);
         StartFlush(userId, samples, chunkStartUtc);
         return Task.CompletedTask;
     }
@@ -306,7 +308,7 @@ internal sealed class VoiceSession
 
         foreach (var (userId, buffer) in users)
         {
-            var (samples, chunkStartUtc) = buffer.TakeAll();
+            var (samples, chunkStartUtc) = buffer.TakeAll(drainResampler: true);
             if (samples.Length == 0)
                 continue;
             try

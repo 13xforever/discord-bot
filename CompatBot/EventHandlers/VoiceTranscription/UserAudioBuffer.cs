@@ -20,11 +20,11 @@ internal sealed class UserAudioBuffer
     private readonly Lock gate = new();
 
     private short[] buffer = new short[InitialBufferSize];
+    private short[] discarded = [];
     private int length;
     private DateTime? chunkStartUtc;
 
     private long receivedFrameCount;
-    private long lastProcessedFrameCount;
     private byte pendingByte;
     private bool hasPendingByte;
 
@@ -118,22 +118,37 @@ internal sealed class UserAudioBuffer
 
     private void ConsumeSamples(ReadOnlySpan<short> interleavedSamples)
     {
-        var samples16k = resampler.Resample(interleavedSamples);
-        var processedFrames = resampler.ProcessedFrameCount;
-        var newFrames = processedFrames - lastProcessedFrameCount;
-        lastProcessedFrameCount = processedFrames;
-
-        if (samples16k.Length != 0 && isSpeakingProvider())
-            lock (gate)
+        // the resampler is not thread safe, and TakeAll can reach it from the session thread to
+        // drain it, so everything that touches it goes through the same lock
+        lock (gate)
+        {
+            var maxOutput = resampler.MaxOutputFrames(interleavedSamples.Length);
+            var speaking = isSpeakingProvider();
+            Span<short> destination;
+            if (speaking)
             {
-                EnsureCapacity(length + samples16k.Length);
-                samples16k.CopyTo(buffer.AsSpan(length));
-                length += samples16k.Length;
+                EnsureCapacity(length + maxOutput);
+                destination = buffer.AsSpan(length, maxOutput);
+            }
+            else
+            {
+                // the samples still have to go through the filter to keep its history and phase in
+                // step with the stream, they just don't get kept
+                if (discarded.Length < maxOutput)
+                    Array.Resize(ref discarded, maxOutput);
+                destination = discarded.AsSpan(0, maxOutput);
+            }
+
+            var written = resampler.Resample(interleavedSamples, destination, out var frames);
+            if (speaking && written > 0)
+            {
+                length += written;
                 chunkStartUtc ??= DateTime.UtcNow;
             }
 
-        // counted last, so anyone watching this counter can see the samples that come with it
-        Interlocked.Add(ref receivedFrameCount, newFrames);
+            // counted last, so anyone watching this counter can see the samples that come with it
+            Interlocked.Add(ref receivedFrameCount, frames);
+        }
     }
 
     private void EnsureCapacity(int required)
@@ -171,12 +186,24 @@ internal sealed class UserAudioBuffer
     }
 
     /// <summary>
-    /// Takes all buffered audio regardless of age (used when the session ends).
+    /// Takes all buffered audio regardless of age. <paramref name="drainResampler"/> also flushes
+    /// whatever the filter still holds, which is what you want whenever this buffer is the last
+    /// thing that participant's audio ever goes through.
     /// </summary>
-    public (short[] Samples, DateTime? ChunkStartUtc) TakeAll()
+    public (short[] Samples, DateTime? ChunkStartUtc) TakeAll(bool drainResampler = false)
     {
         lock (gate)
         {
+            if (drainResampler)
+            {
+                var maxDrain = resampler.MaxDrainFrames;
+                EnsureCapacity(length + maxDrain);
+                var drained = resampler.Drain(buffer.AsSpan(length, maxDrain));
+                length += drained;
+                if (drained > 0)
+                    chunkStartUtc ??= DateTime.UtcNow;
+            }
+
             var samples = buffer.AsSpan(0, length).ToArray();
             length = 0;
             var start = chunkStartUtc;
