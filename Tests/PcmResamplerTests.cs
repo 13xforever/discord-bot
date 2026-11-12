@@ -57,7 +57,7 @@ public class PcmResamplerTests
     [Test]
     public void ConstantSignalStaysConstant()
     {
-        var resampler = new PcmResampler(Quality);
+        var resampler = new PcmResampler(quality: Quality);
         var steady = ResampleAll(resampler, InterleaveMono(Enumerable.Repeat((short)1000, InputFrames).ToArray()))
             .Skip(resampler.OutputLatency * 2);
 
@@ -68,7 +68,7 @@ public class PcmResamplerTests
     [Test]
     public void ChannelsAreDownmixedNotInterleavedIntoTheSignal()
     {
-        var resampler = new PcmResampler(Quality);
+        var resampler = new PcmResampler(quality: Quality);
         // left and right out of phase by 180° must cancel out; anything that ignored the channel
         // pairing would happily make a big signal out of this
         var output = ResampleAll(resampler, Interleave(
@@ -85,7 +85,7 @@ public class PcmResamplerTests
         for (var i = 0; i < mono.Length; i++)
             mono[i] = (short)(Math.Sin(2 * Math.PI * 1000 * i / PcmResampler.SourceSampleRate) * 10000);
 
-        var resampler = new PcmResampler(Quality);
+        var resampler = new PcmResampler(quality: Quality);
         var output = ResampleAll(resampler, InterleaveMono(mono)).Skip(resampler.OutputLatency * 2);
         var inputRms = Math.Sqrt(mono.Select(s => (double)s * s).Average());
         var outputRms = Math.Sqrt(output.Select(s => (double)s * s).Average());
@@ -102,7 +102,7 @@ public class PcmResamplerTests
         for (var i = 0; i < mono.Length; i++)
             mono[i] = i % 2 == 0 ? (short)1000 : (short)(-1000);
 
-        var resampler = new PcmResampler(Quality);
+        var resampler = new PcmResampler(quality: Quality);
         var peak = ResampleAll(resampler, InterleaveMono(mono))
             .Skip(resampler.OutputLatency * 4)
             .Max(s => Math.Abs((int)s));
@@ -118,18 +118,18 @@ public class PcmResamplerTests
         for (var i = 0; i < source.Length; i++)
             source[i] = (short)random.Next(-10000, 10000);
 
-        var whole = ResampleAll(new PcmResampler(Quality), source);
+        var whole = ResampleAll(new PcmResampler(quality: Quality), source);
         Assert.That(whole, Is.Not.Empty);
 
         // 3000 interleaved samples is 1500 frames, so these chunks cut through frames
         foreach (var chunk in new[] { 1, 7, 2, 999, 1998, 2999 })
-            Assert.That(ResampleChunked(new PcmResampler(Quality), source, chunk), Is.EqualTo(whole), $"chunked at {chunk} samples");
+            Assert.That(ResampleChunked(new PcmResampler(quality: Quality), source, chunk), Is.EqualTo(whole), $"chunked at {chunk} samples");
     }
 
     [Test]
     public void PartialFramesWaitForTheRestOfThePair()
     {
-        var resampler = new PcmResampler(Quality);
+        var resampler = new PcmResampler(quality: Quality);
         var destination = new short[resampler.MaxOutputFrames(4)];
 
         Assert.That(resampler.Resample([1000], destination, out var framesProcessed), Is.Zero);
@@ -149,7 +149,7 @@ public class PcmResamplerTests
 
         // running the tail of the stream out of the filter has to be the same as feeding the same
         // amount of real silence through it
-        var drainedResampler = new PcmResampler(Quality);
+        var drainedResampler = new PcmResampler(quality: Quality);
         var buffered = ResampleAll(drainedResampler, source);
         var drained = new short[drainedResampler.MaxDrainFrames];
         var drainedCount = drainedResampler.Drain(drained);
@@ -157,7 +157,7 @@ public class PcmResamplerTests
         var silenceFrames = 2 * drainedResampler.InputLatency;
         var padded = new short[source.Length + silenceFrames * PcmResampler.Channels];
         Array.Copy(source, padded, source.Length);
-        var reference = ResampleAll(new PcmResampler(Quality), padded);
+        var reference = ResampleAll(new PcmResampler(quality: Quality), padded);
 
         using (Assert.EnterMultipleScope())
         {
@@ -170,7 +170,7 @@ public class PcmResamplerTests
     [Test]
     public void EmptyInputMakesNoFrames()
     {
-        var resampler = new PcmResampler(Quality);
+        var resampler = new PcmResampler(quality: Quality);
         Assert.That(resampler.Resample([], new short[resampler.MaxOutputFrames(0)], out var framesProcessed), Is.Zero);
         Assert.That(framesProcessed, Is.Zero);
     }
@@ -178,7 +178,7 @@ public class PcmResamplerTests
     [Test]
     public void LatencyMatchesTheFilterLength()
     {
-        var resampler = new PcmResampler(Quality);
+        var resampler = new PcmResampler(quality: Quality);
 
         using (Assert.EnterMultipleScope())
         {

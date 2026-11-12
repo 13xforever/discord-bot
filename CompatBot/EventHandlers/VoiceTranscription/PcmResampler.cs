@@ -31,15 +31,13 @@ internal sealed class PcmResampler
     /// </summary>
     public ResamplerQuality Quality { get; }
 
-    public PcmResampler()
-        : this(GetQuality())
+    public PcmResampler(string tag = "", ResamplerQuality? quality = null)
     {
-    }
-
-    public PcmResampler(ResamplerQuality quality)
-    {
-        Quality = quality;
-        resampler = new SpeexResampler(1, (uint)SourceSampleRate, (uint)TargetSampleRate, quality);
+        Quality = quality ?? GetQuality();
+        resampler = new SpeexResampler(1, (uint)SourceSampleRate, (uint)TargetSampleRate, Quality);
+        Config.Log.Debug($"{tag}: resampler is speex quality {(int)Quality} ({Quality}), {InputLatency * 2} taps, " +
+                         $"{InputLatency} frame(s) of delay on the way in and {OutputLatency} sample(s) on the way out, " +
+                         $"{SourceSampleRate} Hz stereo → {TargetSampleRate} Hz mono");
     }
 
     /// <summary>

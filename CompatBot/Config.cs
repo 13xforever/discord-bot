@@ -127,9 +127,13 @@ internal static class Config
     public static int VoiceTranscriptionMaxPendingSeconds => config.GetValue(nameof(VoiceTranscriptionMaxPendingSeconds), 60);
     // transcript lines beyond this count are dropped, mostly to contain whisper hallucination loops
     public static int VoiceTranscriptionMaxLines => config.GetValue(nameof(VoiceTranscriptionMaxLines), 2000);
-    // how long (in seconds) a dropped voice connection gets to resume with audio before the session ends
+    // how long (in seconds) to wait for the library's own resume to bring audio back before ending the session
+    public static int VoiceTranscriptionResumeWatchSeconds => config.GetValue(nameof(VoiceTranscriptionResumeWatchSeconds), 5);
+    // the longest (in seconds) wait between attempts to rejoin a channel that keeps dropping
     public static int VoiceTranscriptionReconnectGraceSeconds => config.GetValue(nameof(VoiceTranscriptionReconnectGraceSeconds), 30);
-   
+    // whether the native MLS (DAVE) library should log what it's doing; verbose, only useful when audio fails to decrypt
+    public static bool VoiceTranscriptionNativeMlsLogs => config.GetValue(nameof(VoiceTranscriptionNativeMlsLogs), false);
+    
     internal static string CurrentLogPath => Path.GetFullPath(Path.Combine(LogPath, "bot.log"));
 
     public static string GoogleApiConfigPath 
@@ -317,7 +321,7 @@ internal static class Config
 #else
         loggingConfig.AddRule(LogLevel.Info, LogLevel.Fatal, consoleTarget, "default");
 #endif
-        loggingConfig.AddRule(LogLevel.Debug, LogLevel.Fatal, asyncFileTarget);
+        loggingConfig.AddRule(LogLevel.Trace, LogLevel.Fatal, asyncFileTarget);
         loggingConfig.AddRule(LogLevel.Info, LogLevel.Fatal, watchdogTarget);
 
         var ignoreFilter1 = new ConditionBasedFilter { Condition = "contains('${message}','TaskCanceledException')"!, Action = FilterResult.Ignore, };

@@ -211,6 +211,7 @@ internal static class Program
                 })
                 .UseInteractivity()
                 .UseVoice()
+                .ConfigureVoice(options => options.LogNativeMlsDebugMessages = Config.VoiceTranscriptionNativeMlsLogs)
                 .ConfigureEventHandlers(config =>
                 {
                     config.HandleSessionCreated(async (c, sceArgs) =>

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using Whisper.net;
 using Whisper.net.Ggml;
@@ -17,6 +18,13 @@ internal static class WhisperTranscriber
     private const int MinSamplesForTranscription = 1600; // less than 0.1s of audio is not worth transcribing
     private const int MinSamplesForLanguageDetection = PcmResampler.TargetSampleRate; // detection needs about a full second of speech to be reliable
     private const string AutoDetectLanguage = "auto";
+
+    // whisper defaults, spelled out because they're what keeps hallucinated text from running away
+    // on silence and music; the no speech threshold is nudged up a bit to drop background noise sooner
+    private const float NoSpeechThreshold = 0.7f;
+    private const float EntropyThreshold = 2.4f;
+    private const float LogProbThreshold = -1.0f;
+    private const float TemperatureIncrement = 0.2f;
 
     private static readonly SemaphoreSlim JobLock = new(1, 1);
     private static readonly Lock ProcessorGate = new();
@@ -55,7 +63,7 @@ internal static class WhisperTranscriber
                 }
                 File.Move(partialPath, ModelPath);
             }
-            Config.Log.Info($"Whisper model '{Config.WhisperModelVariant}' available");
+            Config.Log.Info($"Whisper {DescribeModel()} is ready, thresholds: noSpeech={NoSpeechThreshold:F2} entropy={EntropyThreshold:F2} logProb={LogProbThreshold:F2} temperatureInc={TemperatureIncrement:F2}");
         }
         catch (Exception e)
         {
@@ -69,19 +77,31 @@ internal static class WhisperTranscriber
     /// language instead of re-detecting it on every chunk, which tends to produce gibberish or
     /// translations for short utterances.
     /// </summary>
-    public static async ValueTask<string?> DetectLanguageAsync(short[] samples16k, CancellationToken cancellationToken)
+    public static async ValueTask<string?> DetectLanguageAsync(string tag, short[] samples16k, CancellationToken cancellationToken)
     {
-        if (samples16k.Length < MinSamplesForLanguageDetection || !ModelAvailable())
+        if (samples16k.Length < MinSamplesForLanguageDetection)
+        {
+            if (samples16k.Length > 0)
+                Config.Log.Trace($"{tag}: language detection needs at least {MinSamplesForLanguageDetection / (double)PcmResampler.TargetSampleRate:F1}s of speech, this chunk is {AudioLength(samples16k.Length)}");
+            return null;
+        }
+
+        if (!ModelAvailable())
             return null;
 
         var samples = ToFloatSamples(samples16k);
-        await JobLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var wait = AwaitLockAsync(tag, cancellationToken).ConfigureAwait(false);
         try
         {
+            var detect = Stopwatch.StartNew();
             var (language, probability) = GetProcessor().DetectLanguageWithProbability(samples);
+            detect.Stop();
             if (string.IsNullOrEmpty(language))
+            {
+                Config.Log.Debug($"{tag}: whisper detected no language at all in {detect.ElapsedMilliseconds}ms");
                 return null;
-            Config.Log.Debug($"Detected voice language '{language}' (p={probability:F2})");
+            }
+            Config.Log.Debug($"{tag}: whisper detected language '{language}' with p={probability:F2} from {samples16k.Length / (double)PcmResampler.TargetSampleRate:F1}s of audio in {detect.ElapsedMilliseconds}ms");
             return language;
         }
         catch (OperationCanceledException)
@@ -103,24 +123,42 @@ internal static class WhisperTranscriber
     /// Transcribes a chunk of 16 kHz mono PCM. <paramref name="language"/> pins the spoken language;
     /// passing null keeps whisper guessing every run.
     /// </summary>
-    public static async ValueTask<IReadOnlyList<TranscribedSegment>> TranscribeAsync(short[] samples16k, string? language, CancellationToken cancellationToken)
+    public static async ValueTask<IReadOnlyList<TranscribedSegment>> TranscribeAsync(string tag, short[] samples16k, string? language, CancellationToken cancellationToken)
     {
         var segments = new List<TranscribedSegment>();
-        if (samples16k.Length < MinSamplesForTranscription || !ModelAvailable())
+        var audioLength = AudioLength(samples16k.Length);
+        if (samples16k.Length < MinSamplesForTranscription)
+        {
+            Config.Log.Trace($"{tag}: {audioLength} of audio is too short to bother whisper, skipped");
+            return segments;
+        }
+
+        if (!ModelAvailable())
             return segments;
 
         var samples = ToFloatSamples(samples16k);
-        await JobLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await AwaitLockAsync(tag, cancellationToken).ConfigureAwait(false);
         try
         {
             var activeProcessor = GetProcessor();
             SetLanguage(activeProcessor, language);
+            var run = Stopwatch.StartNew();
             await foreach (var segment in activeProcessor.ProcessAsync(samples, cancellationToken).ConfigureAwait(false))
             {
                 var text = segment.Text.Trim();
-                if (!string.IsNullOrEmpty(text))
-                    segments.Add(new(text, segment.Start, segment.End));
+                if (string.IsNullOrEmpty(text))
+                    continue;
+
+                segments.Add(new(text, segment.Start, segment.End));
+                Config.Log.Trace($"{tag}: segment {segments.Count} [{segment.Start.TotalSeconds:F2}-{segment.End.TotalSeconds:F2}]s, p={segment.Probability:F2} max={segment.MaxProbability:F2} min={segment.MinProbability:F2} noSpeech={segment.NoSpeechProbability:F2} lang={segment.Language}: \"{text}\"");
             }
+            run.Stop();
+
+            if (segments.Count == 0)
+                Config.Log.Debug($"{tag}: whisper made nothing out of {audioLength} of audio (language {(string.IsNullOrEmpty(language) ? "auto" : language)}), " +
+                                 $"noSpeechThreshold={NoSpeechThreshold:F2} entropyThreshold={EntropyThreshold:F2} logProbThreshold={LogProbThreshold:F2} in {run.ElapsedMilliseconds}ms");
+            else
+                Config.Log.Debug($"{tag}: whisper produced {segments.Count} segment(s) from {audioLength} of audio (language {(string.IsNullOrEmpty(language) ? "auto" : language)}) in {run.ElapsedMilliseconds}ms, rtf={(run.Elapsed.TotalSeconds / (samples16k.Length / (double)PcmResampler.TargetSampleRate)):F2}");
         }
         catch (OperationCanceledException)
         {
@@ -138,6 +176,20 @@ internal static class WhisperTranscriber
         return segments;
     }
 
+    private static async Task AwaitLockAsync(string tag, CancellationToken cancellationToken)
+    {
+        var wait = Stopwatch.StartNew();
+        await JobLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        wait.Stop();
+        if (wait.ElapsedMilliseconds > 0)
+            Config.Log.Trace($"{tag}: waited {wait.ElapsedMilliseconds}ms for the whisper lane");
+    }
+
+    private static string AudioLength(int samples)
+        => samples < PcmResampler.TargetSampleRate
+            ? $"{samples * 1000.0 / PcmResampler.TargetSampleRate:F0}ms"
+            : $"{samples / (double)PcmResampler.TargetSampleRate:F1}s";
+
     private static bool ModelAvailable()
     {
         if (File.Exists(ModelPath))
@@ -145,6 +197,22 @@ internal static class WhisperTranscriber
         if (Interlocked.Exchange(ref logFailed, 1) is 0)
             Config.Log.Error($"Voice transcription unavailable: whisper model '{Config.WhisperModelVariant}' is missing from {ModelCachePath}");
         return false;
+    }
+
+    /// <summary>
+    /// Model file state, so a session's first line already says whether transcription can work at all.
+    /// </summary>
+    public static string DescribeModel()
+    {
+        try
+        {
+            var file = new FileInfo(ModelPath);
+            return $"'{Config.WhisperModelVariant}' at {ModelPath}, {file.Length / 1024.0 / 1024.0:F1} MB";
+        }
+        catch (Exception e)
+        {
+            return $"'{Config.WhisperModelVariant}' expected at {ModelPath} but unavailable ({e.Message})";
+        }
     }
 
     private static WhisperProcessor GetProcessor()
@@ -160,13 +228,10 @@ internal static class WhisperTranscriber
         return factory
             .CreateBuilder()
             .WithLanguage(AutoDetectLanguage)
-            // whisper defaults, spelled out because they're what keeps hallucinated text from
-            // running away on silence and music; the no speech threshold is nudged up a bit to
-            // drop background noise sooner
-            .WithNoSpeechThreshold(0.7f)
-            .WithEntropyThreshold(2.4f)
-            .WithLogProbThreshold(-1.0f)
-            .WithTemperatureInc(0.2f)
+            .WithNoSpeechThreshold(NoSpeechThreshold)
+            .WithEntropyThreshold(EntropyThreshold)
+            .WithLogProbThreshold(LogProbThreshold)
+            .WithTemperatureInc(TemperatureIncrement)
             .Build();
     }
 

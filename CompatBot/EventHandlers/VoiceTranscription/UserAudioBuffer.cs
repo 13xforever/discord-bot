@@ -16,8 +16,9 @@ internal sealed class UserAudioBuffer
 
     private readonly PipeReader reader;
     private readonly Func<bool> isSpeakingProvider;
-    private readonly PcmResampler resampler = new();
+    private readonly PcmResampler resampler;
     private readonly Lock gate = new();
+    private readonly string tag;
 
     private short[] buffer = new short[InitialBufferSize];
     private short[] discarded = [];
@@ -25,13 +26,17 @@ internal sealed class UserAudioBuffer
     private DateTime? chunkStartUtc;
 
     private long receivedFrameCount;
+    private long chunkCount;
+    private long carriedByteCount;
     private byte pendingByte;
     private bool hasPendingByte;
 
-    public UserAudioBuffer(PipeReader reader, Func<bool> isSpeakingProvider)
+    public UserAudioBuffer(PipeReader reader, Func<bool> isSpeakingProvider, string tag, PcmResampler? resampler = null)
     {
         this.reader = reader;
         this.isSpeakingProvider = isSpeakingProvider;
+        this.tag = tag;
+        this.resampler = resampler ?? new PcmResampler(tag);
     }
 
     /// <summary>
@@ -63,16 +68,19 @@ internal sealed class UserAudioBuffer
                     ConsumeBytes(memory.Span);
                 reader.AdvanceTo(segment.End);
                 if (result.IsCompleted || result.IsCanceled)
+                {
+                    Config.Log.Debug($"{tag}: the audio pipe finished after {chunkCount} chunk(s) and {receivedFrameCount} frame(s)");
                     break;
+                }
             }
         }
         catch (OperationCanceledException)
         {
-            // normal shutdown path
+            Config.Log.Debug($"{tag}: audio reading cancelled after {chunkCount} chunk(s) and {receivedFrameCount} frame(s)");
         }
         catch (Exception e)
         {
-            Config.Log.Warn(e, "A voice audio stream broke unexpectedly");
+            Config.Log.Warn(e, $"{tag}: the audio stream broke unexpectedly after {chunkCount} chunk(s) and {receivedFrameCount} frame(s)");
         }
         finally
         {
@@ -83,7 +91,7 @@ internal sealed class UserAudioBuffer
             }
             catch (Exception e)
             {
-                Config.Log.Debug(e, "Failed to complete the voice audio pipe");
+                Config.Log.Debug(e, $"{tag}: failed to complete the audio pipe");
             }
         }
     }
@@ -98,6 +106,7 @@ internal sealed class UserAudioBuffer
                 return;
             // the pending byte started that sample, so the new one completes it as the high half
             var sample = unchecked((short)(pendingByte | (bytes[0] << 8)));
+            Interlocked.Increment(ref carriedByteCount);
             Span<short> single = [sample];
             ConsumeSamples(single);
             start = 1;
@@ -148,6 +157,14 @@ internal sealed class UserAudioBuffer
 
             // counted last, so anyone watching this counter can see the samples that come with it
             Interlocked.Add(ref receivedFrameCount, frames);
+
+            chunkCount++;
+            if (chunkCount == 1)
+                Config.Log.Trace($"{tag}: first audio chunk, {interleavedSamples.Length * sizeof(short)} bytes, {frames} frame(s) at " +
+                                 $"{PcmResampler.SourceSampleRate} Hz, {written} sample(s) at {PcmResampler.TargetSampleRate} Hz, speaking={speaking}");
+            else
+                Config.Log.Trace($"{tag}: chunk #{chunkCount}, {interleavedSamples.Length * sizeof(short)} bytes → {frames} frame(s) consumed, {written} sample(s) kept, " +
+                                 $"speaking={speaking}, buffered={length}, misaligned segment(s) carried={Interlocked.Read(ref carriedByteCount)}");
         }
     }
 
@@ -168,15 +185,24 @@ internal sealed class UserAudioBuffer
     {
         lock (gate)
         {
-            if (length == 0
-                || this.chunkStartUtc is null
-                || DateTime.UtcNow - this.chunkStartUtc.Value < minAge)
+            if (length == 0)
             {
+                Config.Log.Trace($"{tag}: nothing to take, the buffer is empty");
                 samples = [];
                 chunkStartUtc = default;
                 return false;
             }
 
+            var age = DateTime.UtcNow - (this.chunkStartUtc ?? DateTime.UtcNow);
+            if (this.chunkStartUtc is null || age < minAge)
+            {
+                Config.Log.Trace($"{tag}: holding {length} sample(s) back, pending for {age.TotalMilliseconds:F0}ms, needs {minAge.TotalMilliseconds:F0}ms");
+                samples = [];
+                chunkStartUtc = default;
+                return false;
+            }
+
+            Config.Log.Debug($"{tag}: taking {length} sample(s) ({length / (double)PcmResampler.TargetSampleRate:F1}s), pending for {age.TotalMilliseconds:F0}ms");
             chunkStartUtc = this.chunkStartUtc.Value;
             samples = buffer.AsSpan(0, length).ToArray();
             length = 0;
@@ -196,12 +222,18 @@ internal sealed class UserAudioBuffer
         {
             if (drainResampler)
             {
-                var maxDrain = resampler.MaxDrainFrames;
-                EnsureCapacity(length + maxDrain);
-                var drained = resampler.Drain(buffer.AsSpan(length, maxDrain));
-                length += drained;
-                if (drained > 0)
-                    chunkStartUtc ??= DateTime.UtcNow;
+                if (Interlocked.Read(ref receivedFrameCount) == 0)
+                    Config.Log.Trace($"{tag}: nothing to drain, no audio ever came through this pipe");
+                else
+                {
+                    var maxDrain = resampler.MaxDrainFrames;
+                    EnsureCapacity(length + maxDrain);
+                    var drained = resampler.Drain(buffer.AsSpan(length, maxDrain));
+                    length += drained;
+                    if (drained > 0)
+                        chunkStartUtc ??= DateTime.UtcNow;
+                    Config.Log.Debug($"{tag}: drained {drained} sample(s) ({drained * 1000.0 / PcmResampler.TargetSampleRate:F0}ms) out of the resampler filter");
+                }
             }
 
             var samples = buffer.AsSpan(0, length).ToArray();

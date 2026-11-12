@@ -93,4 +93,9 @@
     <ProjectReference Include="..\Clients\IrdLibraryClient\IrdLibraryClient.csproj" />
     <ProjectReference Include="..\Clients\PsnClient\PsnClient.csproj" />
   </ItemGroup>
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <Copy  Condition="'$(Configuration)'=='Debug'"
+           SourceFiles="..\..\DSharpPlus\DSharpPlus.Voice\bin\Debug\net10.0\DSharpPlus.Voice.dll"
+           DestinationFolder="$(OutDir)" />
+  </Target>
 </Project>

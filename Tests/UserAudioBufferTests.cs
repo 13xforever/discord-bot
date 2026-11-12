@@ -14,6 +14,7 @@ public class UserAudioBufferTests
     // 480 stereo frames is 960 interleaved samples, which decimates down to 160 mono samples
     private const int FramesPerBurst = 480;
     private const int DecimatedPerBurst = FramesPerBurst / PcmResampler.DecimationFactor;
+    private const string Tag = "voice[test]";
 
     private static async Task WaitForAsync(Func<bool> condition, int timeoutMs = 5000)
     {
@@ -58,7 +59,7 @@ public class UserAudioBufferTests
     public async Task BuffersVoicedAudio()
     {
         var pipe = new Pipe();
-        var buffer = new UserAudioBuffer(pipe.Reader, () => true);
+        var buffer = new UserAudioBuffer(pipe.Reader, () => true, Tag);
         var runTask = buffer.RunAsync(CancellationToken.None);
 
         await pipe.Writer.WriteAsync(ToBytes(StereoBurst(100))).ConfigureAwait(false);
@@ -85,7 +86,7 @@ public class UserAudioBufferTests
     public async Task IgnoresSilentAudio()
     {
         var pipe = new Pipe();
-        var buffer = new UserAudioBuffer(pipe.Reader, () => false);
+        var buffer = new UserAudioBuffer(pipe.Reader, () => false, Tag);
         var runTask = buffer.RunAsync(CancellationToken.None);
 
         await pipe.Writer.WriteAsync(ToBytes(StereoBurst(100))).ConfigureAwait(false);
@@ -107,7 +108,7 @@ public class UserAudioBufferTests
     public async Task PendingAudioYoungerThanTheMinimumAgeIsLeftAlone()
     {
         var pipe = new Pipe();
-        var buffer = new UserAudioBuffer(pipe.Reader, () => true);
+        var buffer = new UserAudioBuffer(pipe.Reader, () => true, Tag);
         var runTask = buffer.RunAsync(CancellationToken.None);
 
         await pipe.Writer.WriteAsync(ToBytes(StereoBurst(100))).ConfigureAwait(false);
@@ -160,7 +161,7 @@ public class UserAudioBufferTests
 
     private static async Task<(long Frames, short[] Samples)> ReadAllAsync(Pipe pipe, byte[] payload, int[] chunkSizes, bool drain = false)
     {
-        var buffer = new UserAudioBuffer(pipe.Reader, () => true);
+        var buffer = new UserAudioBuffer(pipe.Reader, () => true, Tag);
         var runTask = buffer.RunAsync(CancellationToken.None);
 
         var offset = 0;
@@ -182,7 +183,7 @@ public class UserAudioBufferTests
     public async Task EverythingStillInFlightIsDrainedWhenTheWriterCompletes()
     {
         var pipe = new Pipe();
-        var buffer = new UserAudioBuffer(pipe.Reader, () => true);
+        var buffer = new UserAudioBuffer(pipe.Reader, () => true, Tag);
         var runTask = buffer.RunAsync(CancellationToken.None);
 
         for (var i = 0; i < 5; i++)
@@ -197,7 +198,7 @@ public class UserAudioBufferTests
     public async Task CancellingReleasesThePipeForTheWritingSide()
     {
         var pipe = new Pipe();
-        var buffer = new UserAudioBuffer(pipe.Reader, () => true);
+        var buffer = new UserAudioBuffer(pipe.Reader, () => true, Tag);
         using var cts = new CancellationTokenSource();
         var runTask = buffer.RunAsync(cts.Token);
 
